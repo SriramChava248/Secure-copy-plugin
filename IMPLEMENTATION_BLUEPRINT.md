@@ -96,9 +96,13 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 **Security:**
 - JWT authentication (access + refresh tokens)
+  - Short-lived access tokens (15 minutes)
+  - Refresh tokens (7 days)
+  - Token blacklisting on logout
 - BCrypt password hashing
 - AES-256-GCM encryption at rest
-- HTTPS/TLS enforced
+- HTTPS/TLS enforced (prevents token interception)
+- RBAC (Role-Based Access Control)
 - Rate limiting
 - Input validation
 
@@ -270,12 +274,13 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 **Steps**:
 1. Create `JwtService` class
 2. Implement token generation:
-   - Access token (15 minutes)
-   - Refresh token (7 days)
+   - Access token (15 minutes) - Short-lived for security
+   - Refresh token (7 days) - Longer-lived for convenience
 3. Implement token validation
 4. Implement token claims extraction
 5. Add JWT secret configuration
-6. Test: Generate and validate tokens
+6. Implement token blacklisting check (Redis integration)
+7. Test: Generate and validate tokens
 
 **Deliverable**: JWT service working
 
@@ -289,10 +294,11 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 **Steps**:
 1. Create `JwtAuthenticationFilter` class
 2. Extract token from Authorization header
-3. Validate token using JwtService
-4. Set authentication in SecurityContext
-5. Add filter to security chain
-6. Test: Verify protected endpoints require valid JWT
+3. Check token blacklist (Redis) - reject if blacklisted
+4. Validate token using JwtService
+5. Set authentication in SecurityContext
+6. Add filter to security chain
+7. Test: Verify protected endpoints require valid JWT
 
 **Deliverable**: JWT filter working
 
@@ -310,12 +316,16 @@ This document serves as the **master blueprint** for implementing the Secure Cli
    - `LoginRequest`
    - `AuthResponse`
 3. Create `AuthService`:
-   - `register()` - hash password, save user
-   - `login()` - validate credentials, generate JWT
+   - `register()` - hash password with BCrypt, save user
+   - `login()` - validate credentials, generate JWT tokens (access + refresh)
+   - `logout()` - blacklist token in Redis
+   - `refreshToken()` - generate new access token from refresh token
 4. Implement `POST /api/v1/auth/register`
-5. Implement `POST /api/v1/auth/login`
-6. Add input validation (`@Valid`)
-7. Test: Register and login via Postman/curl
+5. Implement `POST /api/v1/auth/login` (returns access + refresh tokens)
+6. Implement `POST /api/v1/auth/logout` (blacklist token)
+7. Implement `POST /api/v1/auth/refresh` (refresh access token)
+8. Add input validation (`@Valid`)
+9. Test: Register, login, logout, refresh via Postman/curl
 
 **Deliverable**: Registration and login working
 
@@ -327,12 +337,15 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 **Goal**: Implement role-based access control
 
 **Steps**:
-1. Create `Role` enum (USER, ADMIN)
-2. Add role field to User entity
+1. Create `Role` enum (USER, ADMIN) - Already in User entity
+2. Add role field to User entity - Already done
 3. Create role-based security methods
-4. Add `@PreAuthorize` annotations
+4. Add `@PreAuthorize` annotations:
+   - Users can only access their own snippets
+   - Admins can access all snippets
 5. Implement method-level security
-6. Test: Verify role-based access works
+6. Add data ownership checks (users can't access others' data)
+7. Test: Verify role-based access works
 
 **Deliverable**: RBAC implemented
 

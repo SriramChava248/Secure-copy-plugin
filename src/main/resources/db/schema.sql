@@ -67,3 +67,14 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 CREATE TRIGGER update_snippets_updated_at BEFORE UPDATE ON snippets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+
+
+
+
+
+
+
+
+
+
+

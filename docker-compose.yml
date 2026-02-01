@@ -43,4 +43,3 @@ volumes:
 networks:
   secure-clipboard-network:
     driver: bridge
-
