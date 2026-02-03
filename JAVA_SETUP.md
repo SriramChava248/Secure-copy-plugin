@@ -142,3 +142,4 @@ jenv global 17.0
 - The `start.sh` script no longer sets Java - it uses your system default
 - Make sure Java 17 is set before running `./start.sh`
 
+

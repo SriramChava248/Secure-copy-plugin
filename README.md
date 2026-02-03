@@ -6,7 +6,7 @@ A secure, enterprise-grade clipboard management Chrome extension that allows use
 
 This project addresses the security concerns with open-source clipboard managers (like Maccy) by providing a secure, authenticated clipboard solution. It demonstrates:
 
-- **Security-First Architecture**: JWT authentication, RBAC, HTTPS/TLS, rate limiting
+- **Security-First Architecture**: JWT authentication, RBAC, HTTPS/TLS
 - **Performance Optimization**: Large text chunking, Redis caching, async processing
 - **Scalability**: Stateless design, database optimization, horizontal scaling capability
 - **Production Readiness**: CI/CD pipeline, Docker deployment, monitoring
@@ -19,7 +19,7 @@ Chrome Extension (UI + Background Script)
         v
 Spring Boot Backend (REST APIs)
         |
-        +---> Redis (Cache: Recent snippets, Rate limiting, Token blacklist)
+        +---> Redis (Cache: Recent snippets, Token blacklist)
         |
         v
 PostgreSQL (Primary Storage: Users, Snippets, Chunks)
@@ -30,7 +30,7 @@ PostgreSQL (Primary Storage: Users, Snippets, Chunks)
 1. **Chrome Extension**: Captures clipboard events, manages authentication, displays snippets
 2. **Spring Boot Backend**: RESTful APIs with Spring Security, JWT, RBAC
 3. **PostgreSQL**: Primary data storage with chunking for large text
-4. **Redis**: Fast cache for recent snippets, rate limiting, token management
+4. **Redis**: Fast cache for recent snippets, token management
 
 ## 🔐 Security Features
 
@@ -38,7 +38,6 @@ PostgreSQL (Primary Storage: Users, Snippets, Chunks)
 - **Authorization**: Role-Based Access Control (RBAC) with USER/ADMIN roles
 - **Transport Security**: HTTPS/TLS enforced
 - **Input Validation**: Request size limits, content validation, sanitization
-- **Rate Limiting**: Protection against abuse on auth and API endpoints
 - **Data Protection**: BCrypt password hashing, encrypted token storage
 
 ## 🚀 Key Features

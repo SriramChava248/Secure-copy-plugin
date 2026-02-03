@@ -57,7 +57,6 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 │  │  Services                                         │ │
 │  │  - AuthService (JWT, BCrypt)                     │ │
 │  │  - SnippetService (Processing, Validation)       │ │
-│  │  - EncryptionService (AES-256-GCM)               │ │
 │  │  - CompressionService (GZIP)                     │ │
 │  └──────────────┬────────────────────────────────────┘ │
 │                 │                                        │
@@ -100,10 +99,8 @@ This document serves as the **master blueprint** for implementing the Secure Cli
   - Refresh tokens (7 days)
   - Token blacklisting on logout
 - BCrypt password hashing
-- AES-256-GCM encryption at rest
 - HTTPS/TLS enforced (prevents token interception)
 - RBAC (Role-Based Access Control)
-- Rate limiting
 - Input validation
 
 **Deployment:**
@@ -124,24 +121,29 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 2. **Clipboard Management**
    - Capture copy events from web pages
-   - Store snippets securely (encrypted, compressed, chunked)
+   - Store snippets securely (compressed, chunked)
    - Display recent 50 snippets in UI
    - Paste functionality
    - Delete snippets
 
 3. **Security**
-   - All content encrypted at rest
    - All content compressed
    - JWT-based authentication
    - RBAC (USER/ADMIN roles)
-   - Rate limiting
    - Input validation
 
 4. **Performance**
-   - Snippet save: < 1 second
+   - Snippet save: < 1 second (async response ~30ms, background processing)
    - Snippet retrieval: < 200ms (from Redis cache)
-   - Parallel processing for large text
+   - **Parallel Processing Strategy**:
+     * **Saving**: Chunks processed in parallel (compress + save)
+       - Sequential: 4 chunks × 5ms = 20ms
+       - Parallel: Max(5ms) = 5ms (4x faster)
+     * **Retrieving**: Snippets processed in parallel (reassemble + decompress)
+       - Sequential: 50 snippets × 3ms = 150ms
+       - Parallel: Max(3ms) = 3ms (50x faster)
    - Batch database operations
+   - Single query for all chunks (IN clause)
 
 ### Non-Functional Requirements
 
@@ -149,6 +151,96 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 - **Performance**: < 1 second save, < 200ms retrieval
 - **Reliability**: Database persistence, Redis caching
 - **Scalability**: Stateless design, horizontal scaling ready
+
+---
+
+## ⚡ Parallel Processing Architecture
+
+### Overview
+
+To achieve optimal performance, the system uses **parallel processing** for both saving and retrieving snippets. This ensures fast response times even with large text and multiple snippets.
+
+### 1. Saving Snippets (Async + Parallel)
+
+**Flow:**
+```
+User creates snippet
+    ↓
+saveSnippet() - SYNCHRONOUS (~30ms)
+    ├─ Validate limits
+    ├─ Create snippet metadata (save to DB)
+    ├─ Add to Redis queue (with raw content)
+    └─ Return response immediately ✅
+    ↓
+processSnippetAsync() - ASYNC (background)
+    ├─ Chunk data → [chunk0, chunk1, chunk2, chunk3]
+    └─ Process chunks IN PARALLEL:
+        ├─ Chunk 0: Compress → Save to DB
+        ├─ Chunk 1: Compress → Save to DB (parallel)
+        ├─ Chunk 2: Compress → Save to DB (parallel)
+        └─ Chunk 3: Compress → Save to DB (parallel)
+    └─ Update snippet status to COMPLETED
+```
+
+**Performance:**
+- **Sequential**: 4 chunks × 5ms = 20ms
+- **Parallel**: Max(5ms) = 5ms
+- **Speedup**: 4x faster
+
+**Implementation:**
+- Use `@Async` annotation for background processing
+- Use `CompletableFuture` for parallel chunk processing
+- Each chunk processed independently (compress → save)
+
+### 2. Retrieving Snippets (Parallel)
+
+**Flow:**
+```
+User requests snippets
+    ↓
+1. Redis: Get snippet IDs → [456, 455, 454, ...] (~2ms)
+    ↓
+2. Database: Get all chunks (single query with IN clause) (~50ms)
+    ↓
+3. Group chunks by snippet ID
+    ↓
+4. Process snippets IN PARALLEL:
+    ├─ Snippet 456: Reassemble + Decompress + Decrypt
+    ├─ Snippet 455: Reassemble + Decompress + Decrypt (parallel)
+    ├─ Snippet 454: Reassemble + Decompress + Decrypt (parallel)
+    └─ ... (all 50 snippets in parallel)
+    ↓
+5. Return all snippets to UI (~5ms total processing time)
+```
+
+**Performance:**
+- **Sequential**: 50 snippets × 5ms = 250ms
+- **Parallel**: Max(5ms) = 5ms
+- **Speedup**: 50x faster
+
+**Implementation:**
+- Single database query for all chunks (`WHERE snippet_id IN (...)`)
+- Use `CompletableFuture` for parallel snippet processing
+- Each snippet processed independently (reassemble → decompress → decrypt)
+
+### 3. Key Benefits
+
+1. **Fast Response Times**: Users get immediate feedback (< 30ms)
+2. **Background Processing**: Heavy operations don't block UI
+3. **Scalability**: Parallel processing scales with CPU cores
+4. **Efficiency**: Database queries optimized (single query vs. multiple)
+
+### 4. Technical Details
+
+**Tools Used:**
+- `@Async` (Spring): For async method execution
+- `CompletableFuture`: For parallel task execution
+- `ExecutorService`: Thread pool management (Spring-managed)
+
+**Thread Safety:**
+- Each chunk/snippet processed independently
+- No shared mutable state between parallel tasks
+- Database transactions isolated per chunk
 
 ---
 
@@ -198,7 +290,6 @@ This document serves as the **master blueprint** for implementing the Secure Cli
    - Database connection (placeholder)
    - Redis connection (placeholder)
    - JWT secret (placeholder)
-   - Encryption key (placeholder)
    - Environment-specific values can be overridden via environment variables
 5. Test: Run application, verify it starts
 
@@ -355,23 +446,7 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 ## PHASE 3: Backend Core APIs
 
-### Module 3.1: Encryption Service
-**Goal**: Implement encryption at rest
-
-**Steps**:
-1. Create `EncryptionService` class
-2. Implement AES-256-GCM encryption
-3. Implement decryption
-4. Add encryption key configuration
-5. Test: Encrypt and decrypt sample text
-
-**Deliverable**: Encryption service working
-
-**Review Gate**: ✅ Encryption implementation approved
-
----
-
-### Module 3.2: Compression Service
+### Module 3.1: Compression Service
 **Goal**: Implement GZIP compression
 
 **Steps**:
@@ -386,7 +461,7 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 ---
 
-### Module 3.3: Chunking Service
+### Module 3.2: Chunking Service
 **Goal**: Implement text chunking for large content
 
 **Steps**:
@@ -402,25 +477,28 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 ---
 
-### Module 3.4: Snippet Processing Service
-**Goal**: Combine encryption, compression, chunking
+### Module 3.3: Snippet Processing Service
+**Goal**: Combine compression and chunking
 
 **Steps**:
 1. Create `SnippetProcessingService`
 2. Implement processing pipeline:
-   - Chunk → Encrypt → Compress
+   - Chunk → Compress
 3. Implement reverse pipeline:
-   - Decompress → Decrypt → Reassemble
-4. Add parallel processing
+   - Decompress → Reassemble
+4. Add parallel processing:
+   - Process chunks in parallel (when saving)
+   - Process snippets in parallel (when retrieving)
+   - Use `CompletableFuture` for async operations
 5. Test: Process and retrieve snippets
 
-**Deliverable**: Processing service working
+**Deliverable**: Processing service working with parallel processing
 
 **Review Gate**: ✅ Processing pipeline approved
 
 ---
 
-### Module 3.5: Snippet Service (Core Logic)
+### Module 3.4: Snippet Service (Core Logic)
 **Goal**: Implement snippet business logic
 
 **Steps**:
@@ -431,16 +509,22 @@ This document serves as the **master blueprint** for implementing the Secure Cli
    - Create snippet metadata (save to DB)
    - Add to Redis queue immediately (with raw content)
    - Return response immediately (~30ms)
-   - Start async processing for chunking/encryption/compression
+   - Start async processing for chunking/compression
 3. Implement `processSnippetAsync()` (ASYNC - background):
-   - Process snippet (chunk, encrypt, compress)
-   - Save processed chunks to database
+   - Process snippet (chunk, compress)
+   - Process chunks IN PARALLEL:
+     * Each chunk: Compress → Save to DB (parallel)
+     * Use `CompletableFuture` for parallel chunk processing
+   - Save processed chunks to database (parallel saves)
    - Update snippet status to COMPLETED
    - Remove raw content (security)
 3. Implement `getRecentSnippets()`:
-   - Check Redis cache first
-   - Fallback to database
-   - Decrypt and return
+   - Get snippet IDs from Redis queue
+   - Get all chunks from database (single query with IN clause)
+   - Process snippets IN PARALLEL:
+     * Each snippet: Reassemble + Decompress (parallel)
+     * Use `CompletableFuture` for parallel snippet processing
+   - Return all snippets to UI
 4. Implement `getSnippet()`:
    - Fetch from database
    - Decrypt and return
@@ -460,7 +544,7 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 ---
 
-### Module 3.6: Snippet Controller
+### Module 3.5: Snippet Controller
 **Goal**: Create REST endpoints for snippets
 
 **Steps**:
@@ -483,23 +567,7 @@ This document serves as the **master blueprint** for implementing the Secure Cli
 
 ---
 
-### Module 3.7: Rate Limiting
-**Goal**: Implement rate limiting
-
-**Steps**:
-1. Add Bucket4j dependency
-2. Create rate limiter configuration
-3. Add rate limiting to auth endpoints
-4. Add rate limiting to snippet endpoints
-5. Test: Verify rate limiting works
-
-**Deliverable**: Rate limiting implemented
-
-**Review Gate**: ✅ Rate limiting approved
-
----
-
-### Module 3.8: Global Exception Handler
+### Module 3.6: Global Exception Handler
 **Goal**: Centralized error handling
 
 **Steps**:
@@ -917,7 +985,7 @@ Each module should ensure:
 
 ### Backend:
 - ✅ All APIs working
-- ✅ Security implemented (JWT, RBAC, encryption)
+- ✅ Security implemented (JWT, RBAC)
 - ✅ Performance: < 1 second save, < 200ms retrieval
 - ✅ Tests passing (>80% coverage)
 

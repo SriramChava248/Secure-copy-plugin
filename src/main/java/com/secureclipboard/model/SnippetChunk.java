@@ -34,9 +34,6 @@ public class SnippetChunk {
     @Column(name = "content_hash", length = 64)
     private String contentHash;
     
-    @Column(name = "encryption_iv", columnDefinition = "BYTEA")
-    private byte[] encryptionIv;
-    
     @Column(name = "is_compressed", nullable = false)
     private Boolean isCompressed = true;
     

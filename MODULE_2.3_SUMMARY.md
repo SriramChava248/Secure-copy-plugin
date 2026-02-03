@@ -204,3 +204,4 @@ To verify JWT Filter:
 
 **Next Module**: Module 2.4 - Authentication APIs (register, login, logout, refresh)
 
+

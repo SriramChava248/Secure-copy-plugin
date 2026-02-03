@@ -30,14 +30,13 @@ CREATE TABLE IF NOT EXISTS snippets (
     CONSTRAINT snippets_status_check CHECK (status IN ('PROCESSING', 'COMPLETED', 'FAILED'))
 );
 
--- Snippet chunks table (stores encrypted and compressed chunks)
+-- Snippet chunks table (stores compressed chunks)
 CREATE TABLE IF NOT EXISTS snippet_chunks (
     id BIGSERIAL PRIMARY KEY,
     snippet_id BIGINT NOT NULL,
     chunk_index INT NOT NULL,
     content BYTEA NOT NULL,
     content_hash VARCHAR(64),
-    encryption_iv BYTEA,
     is_compressed BOOLEAN DEFAULT TRUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT chunks_snippet_fk FOREIGN KEY (snippet_id) REFERENCES snippets(id) ON DELETE CASCADE,
