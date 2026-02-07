@@ -28,10 +28,16 @@ public interface SnippetRepository extends JpaRepository<Snippet, Long> {
     // Find all snippets for a user (for search functionality)
     List<Snippet> findByUserIdAndIsDeletedFalse(Long userId);
     
+    // Find snippets ordered by creation date (for limited search)
+    List<Snippet> findByUserIdAndIsDeletedFalseOrderByCreatedAtDesc(Long userId);
+    
     // Clear all snippets for a user (soft delete - marks all as deleted)
     @Query("UPDATE Snippet s SET s.isDeleted = true WHERE s.userId = :userId AND s.isDeleted = false")
     @Modifying
     @Transactional
     int clearAllSnippets(@Param("userId") Long userId);
+    
+    // Count active snippets for a user
+    long countByUserIdAndIsDeletedFalse(Long userId);
 }
 

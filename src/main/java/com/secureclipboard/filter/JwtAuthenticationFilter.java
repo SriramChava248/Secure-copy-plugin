@@ -61,8 +61,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             // Step 2: Validate token (signature + expiration)
             if (!jwtService.validateToken(token)) {
-                log.debug("Invalid token: {}", requestPath);
-                filterChain.doFilter(request, response);
+                log.debug("Invalid or expired token: {}", requestPath);
+                // Return 401 for invalid/expired tokens instead of letting Spring Security return 403
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"error\":\"Token expired or invalid\",\"message\":\"Please login again\"}");
                 return;
             }
 

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Clipboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Login Screen (shown when not authenticated) -->
+        <div id="loginScreen" class="screen">
+            <div class="container">
+                <h1>Secure Clipboard</h1>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                    <button type="button" id="registerBtn" class="btn btn-secondary">Register</button>
+                    <div id="loginError" class="error-message" style="display: none;"></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Register Screen -->
+        <div id="registerScreen" class="screen" style="display: none;">
+            <div class="container">
+                <h1>Register</h1>
+                <form id="registerForm">
+                    <div class="form-group">
+                        <label for="regEmail">Email</label>
+                        <input type="email" id="regEmail" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="regPassword">Password</label>
+                        <input type="password" id="regPassword" name="password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Register</button>
+                    <button type="button" id="backToLoginBtn" class="btn btn-secondary">Back to Login</button>
+                    <div id="registerError" class="error-message" style="display: none;"></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Clipboard Screen (shown when authenticated) -->
+        <div id="clipboardScreen" class="screen" style="display: none;">
+            <div class="header">
+                <div class="app-title">Secure Clipboard</div>
+                <div class="header-actions">
+                    <div class="search-container">
+                        <span class="search-icon">🔍</span>
+                        <input 
+                            type="text" 
+                            id="searchInput" 
+                            class="search-input" 
+                            placeholder="type to search..."
+                            autocomplete="off"
+                        >
+                    </div>
+                    <button id="logoutBtn" class="btn-logout" title="Logout">
+                        Logout
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading State -->
+            <div id="loadingState" class="loading-state">
+                <div class="spinner"></div>
+                <div class="loading-text">Loading snippets...</div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="empty-state" style="display: none;">
+                <div class="empty-icon">📋</div>
+                <div class="empty-text">No snippets yet</div>
+                <div class="empty-subtext">Copy some text to get started!</div>
+            </div>
+
+            <!-- Snippets List -->
+            <div id="snippetsContainer" class="snippets-container">
+                <!-- Snippets will be dynamically inserted here -->
+            </div>
+
+            <!-- Footer Actions -->
+            <div class="footer">
+                <button id="deleteAllBtn" class="footer-btn delete-all-btn">
+                    Clear all
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="storage.js"></script>
+    <script src="api.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>
+

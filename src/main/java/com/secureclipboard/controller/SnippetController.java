@@ -104,6 +104,22 @@ public class SnippetController {
         snippetService.deleteSnippet(id);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * Update snippet access (move to top of queue)
+     * POST /api/v1/snippets/{id}/access
+     * 
+     * Moves snippet to front of Redis queue when user accesses it
+     * 
+     * @param id Snippet ID
+     * @return 204 No Content
+     */
+    @PostMapping("/{id}/access")
+    public ResponseEntity<Void> updateSnippetAccess(@PathVariable Long id) {
+        log.debug("Updating access for snippet {} for user", id);
+        snippetService.updateSnippetAccess(id);
+        return ResponseEntity.noContent().build();
+    }
 }
 
 

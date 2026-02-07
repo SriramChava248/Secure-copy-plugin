@@ -10,6 +10,9 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import com.fasterxml.jackson.core.exc.StreamConstraintsException;
+import com.fasterxml.jackson.databind.JsonMappingException;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -43,6 +46,24 @@ public class GlobalExceptionHandler {
                 .build();
         
         log.debug("Validation error: {}", errors);
+        return ResponseEntity.badRequest().body(errorResponse);
+    }
+
+    /**
+     * Handle snippet limit exceeded exceptions
+     */
+    @ExceptionHandler(com.secureclipboard.exception.SnippetLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleSnippetLimitExceededException(
+            com.secureclipboard.exception.SnippetLimitExceededException ex) {
+        ErrorResponse errorResponse = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("Snippet Limit Exceeded")
+                .message(ex.getMessage())
+                .build();
+        
+        log.info("Snippet limit exceeded for user: {} snippets (max: {})", 
+            ex.getCurrentCount(), ex.getMaxLimit());
         return ResponseEntity.badRequest().body(errorResponse);
     }
 
@@ -111,20 +132,103 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handle runtime exceptions (e.g., not found)
+     * Handle HTTP message not readable exceptions (e.g., JSON parsing errors, size limits)
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
+        String errorMessage = "Invalid request body";
+        
+        // Extract actual error from nested exceptions
+        Throwable cause = ex.getCause();
+        if (cause != null) {
+            if (cause instanceof StreamConstraintsException) {
+                // Jackson string length limit exceeded
+                StreamConstraintsException streamEx = (StreamConstraintsException) cause;
+                String msg = streamEx.getMessage();
+                // Extract size information from message like "String length (20054016) exceeds the maximum length (20000000)"
+                if (msg != null && msg.contains("exceeds the maximum length")) {
+                    errorMessage = "Content size exceeds maximum limit (20MB). " + msg;
+                } else {
+                    errorMessage = "Content size exceeds maximum limit (20MB)";
+                }
+            } else if (cause instanceof JsonMappingException) {
+                // JSON mapping error - try to extract meaningful message
+                JsonMappingException jsonEx = (JsonMappingException) cause;
+                Throwable jsonCause = jsonEx.getCause();
+                if (jsonCause instanceof StreamConstraintsException) {
+                    StreamConstraintsException streamEx = (StreamConstraintsException) jsonCause;
+                    String msg = streamEx.getMessage();
+                    if (msg != null && msg.contains("exceeds the maximum length")) {
+                        errorMessage = "Content size exceeds maximum limit (20MB). " + msg;
+                    } else {
+                        errorMessage = "Content size exceeds maximum limit (20MB)";
+                    }
+                } else {
+                    errorMessage = jsonEx.getOriginalMessage() != null ? 
+                        jsonEx.getOriginalMessage() : jsonEx.getMessage();
+                }
+            } else {
+                // Use cause message if available
+                String causeMsg = cause.getMessage();
+                if (causeMsg != null && causeMsg.contains("exceeds the maximum length")) {
+                    errorMessage = "Content size exceeds maximum limit (20MB). " + causeMsg;
+                } else {
+                    errorMessage = causeMsg != null ? causeMsg : ex.getMessage();
+                }
+            }
+        }
+        
+        // Fallback to exception message if no specific cause found
+        if (errorMessage == null || errorMessage.equals("Invalid request body")) {
+            String exMsg = ex.getMessage();
+            if (exMsg != null && exMsg.contains("exceeds the maximum length")) {
+                errorMessage = "Content size exceeds maximum limit (20MB). " + exMsg;
+            } else {
+                errorMessage = exMsg != null ? exMsg : "Invalid request body";
+            }
+        }
+        
+        ErrorResponse errorResponse = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("Invalid Request")
+                .message(errorMessage)
+                .build();
+        
+        log.debug("HTTP message not readable: {}", errorMessage);
+        return ResponseEntity.badRequest().body(errorResponse);
+    }
+
+    /**
+     * Handle runtime exceptions (e.g., not found, duplicate content)
      */
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ErrorResponse> handleRuntimeException(RuntimeException ex) {
+        String message = ex.getMessage();
+        
+        // Check if it's a duplicate content exception
+        if (message != null && message.contains("Duplicate content")) {
+            ErrorResponse errorResponse = ErrorResponse.builder()
+                    .timestamp(LocalDateTime.now())
+                    .status(HttpStatus.CONFLICT.value())
+                    .error("Duplicate Content")
+                    .message("This snippet already exists")
+                    .build();
+            
+            log.debug("Duplicate content detected: {}", message);
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+        }
+        
         // Check if it's a "not found" type exception
-        if (ex.getMessage() != null && ex.getMessage().contains("not found")) {
+        if (message != null && message.contains("not found")) {
             ErrorResponse errorResponse = ErrorResponse.builder()
                     .timestamp(LocalDateTime.now())
                     .status(HttpStatus.NOT_FOUND.value())
                     .error("Not Found")
-                    .message(ex.getMessage())
+                    .message(message)
                     .build();
             
-            log.debug("Resource not found: {}", ex.getMessage());
+            log.debug("Resource not found: {}", message);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
         }
         
@@ -136,7 +240,7 @@ public class GlobalExceptionHandler {
                 .message("An unexpected error occurred")
                 .build();
         
-        log.error("Runtime exception: {}", ex.getMessage(), ex);
+        log.error("Runtime exception: {}", message, ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
     }
 

@@ -69,11 +69,13 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // Allow Chrome extension origin (will be set to actual extension ID)
-        // For now, allow localhost for development
-        configuration.setAllowedOrigins(Arrays.asList(
-            "chrome-extension://*",  // Will be replaced with actual extension ID
-            "http://localhost:*"     // For development/testing
+        // Allow all origins for Chrome extensions (they have unique IDs)
+        // Chrome extensions have format: chrome-extension://<extension-id>
+        // We can't predict the extension ID, so allow all chrome-extension origins
+        configuration.setAllowedOriginPatterns(Arrays.asList(
+            "chrome-extension://*",  // All Chrome extensions
+            "http://localhost:*",     // For development/testing
+            "http://127.0.0.1:*"      // Alternative localhost
         ));
         
         // Allow specific HTTP methods
@@ -117,6 +119,9 @@ public class SecurityConfig {
                 
                 // Actuator health endpoint (for monitoring)
                 .requestMatchers("/actuator/health").permitAll()
+                
+                // Static resources (HTML, CSS, JS) - public for initial load
+                .requestMatchers("/", "/index.html", "/login.html", "/css/**", "/js/**").permitAll()
                 
                 // All other endpoints require authentication
                 .anyRequest().authenticated()

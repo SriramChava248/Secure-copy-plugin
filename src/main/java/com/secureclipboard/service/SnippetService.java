@@ -2,6 +2,7 @@ package com.secureclipboard.service;
 
 import com.secureclipboard.dto.CreateSnippetRequest;
 import com.secureclipboard.dto.SnippetResponse;
+import com.secureclipboard.exception.SnippetLimitExceededException;
 import com.secureclipboard.model.Snippet;
 import com.secureclipboard.model.SnippetChunk;
 import com.secureclipboard.repository.SnippetChunkRepository;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -31,6 +33,12 @@ public class SnippetService {
 
     @Value("${snippet.max-words-per-snippet:10000}")
     private int maxWordsPerSnippet;
+    
+    @Value("${snippet.max-snippets-per-user:1000}")
+    private int maxSnippetsPerUser;
+    
+    @Value("${snippet.search-max-snippets:100}")
+    private int searchMaxSnippets;
 
     /**
      * Save snippet (SYNCHRONOUS - quick response)
@@ -44,7 +52,16 @@ public class SnippetService {
         public SnippetResponse saveSnippet(CreateSnippetRequest request) {
         Long userId = SecurityUtils.getCurrentUserId();
         
-        // Step 1: Validate word limit (for responsiveness)
+        // Step 1: Check for duplicate (only check non-deleted snippets)
+        if (isDuplicateContent(userId, request.getContent())) {
+            log.info("Duplicate content detected for user {}, skipping save", userId);
+            throw new RuntimeException("Duplicate content: This snippet already exists");
+        }
+        
+        // Step 2: Check snippet count limit
+        validateSnippetLimit(userId);
+        
+        // Step 3: Validate word limit (for responsiveness)
         validateWordLimit(request.getContent());
         
         // Step 2: Create snippet metadata
@@ -241,8 +258,9 @@ public class SnippetService {
 
     /**
      * Search snippets by content
-     * Uses parallel processing for efficient search
-     * TODO: Implement PostgreSQL full-text search (will be enhanced in future)
+     * Optimized with:
+     * 1. Limit to recent N snippets (configurable)
+     * 2. Streaming search with early termination (searches during reassembly)
      * 
      * @param query Search query
      * @return List of matching snippets
@@ -250,8 +268,13 @@ public class SnippetService {
     public List<SnippetResponse> searchSnippets(String query) {
         Long userId = SecurityUtils.getCurrentUserId();
         
-        // Step 1: Get all snippet IDs for user
-        List<Snippet> snippets = snippetRepository.findByUserIdAndIsDeletedFalse(userId);
+        // Step 1: Get recent snippet IDs (limited for performance)
+        // Order by most recent first (createdAt DESC)
+        List<Snippet> snippets = snippetRepository
+                .findByUserIdAndIsDeletedFalseOrderByCreatedAtDesc(userId)
+                .stream()
+                .limit(searchMaxSnippets)
+                .collect(Collectors.toList());
         
         if (snippets.isEmpty()) {
             return List.of();
@@ -260,6 +283,9 @@ public class SnippetService {
         List<Long> snippetIds = snippets.stream()
                 .map(Snippet::getId)
                 .collect(Collectors.toList());
+        
+        log.debug("Searching {} snippets (limited from total) for query: {}", 
+            snippetIds.size(), query);
         
         // Step 2: Get all chunks from database (single query with IN clause)
         List<SnippetChunk> allChunks = chunkRepository
@@ -273,52 +299,68 @@ public class SnippetService {
         java.util.Map<Long, Snippet> snippetMap = snippets.stream()
                 .collect(Collectors.toMap(Snippet::getId, s -> s));
         
-        // Step 5: Create SnippetData objects for parallel processing
-        // Filter out snippets without chunks and create data objects
-        List<SnippetProcessingService.SnippetData> snippetsData = new ArrayList<>();
-        List<Long> validSnippetIds = new ArrayList<>(); // Track which snippet IDs have chunks
-        
-        for (Long snippetId : snippetIds) {
-            List<SnippetChunk> chunks = chunksBySnippet.getOrDefault(snippetId, List.of());
-            if (chunks.isEmpty()) {
-                continue;
-            }
-            
-            List<byte[]> chunkContents = chunks.stream()
-                    .map(SnippetChunk::getContent)
-                    .collect(Collectors.toList());
-            boolean isCompressed = chunks.get(0).getIsCompressed();
-            snippetsData.add(new SnippetProcessingService.SnippetData(chunkContents, isCompressed));
-            validSnippetIds.add(snippetId);
-        }
-        
-        if (snippetsData.isEmpty()) {
-            return List.of();
-        }
-        
-        // Step 6: Process snippets IN PARALLEL (decompress, reassemble)
-        List<String> contents = processingService.processSnippetsForRetrievalParallel(snippetsData);
-        
-        // Step 7: Filter by search query (case-insensitive) and build responses
-        String queryLower = query.toLowerCase();
+        // Step 5: Process snippets in parallel with streaming search
+        // This searches during reassembly, allowing early termination
         List<SnippetResponse> results = new ArrayList<>();
         
-        for (int i = 0; i < validSnippetIds.size(); i++) {
-            Long snippetId = validSnippetIds.get(i);
-            String content = contents.get(i);
-            
-            // Simple text search (case-insensitive)
-            if (content.toLowerCase().contains(queryLower)) {
-                Snippet snippet = snippetMap.get(snippetId);
-                results.add(SnippetResponse.builder()
-                        .id(snippet.getId())
-                        .content(content)
-                        .sourceUrl(snippet.getSourceUrl())
-                        .createdAt(snippet.getCreatedAt())
-                        .updatedAt(snippet.getUpdatedAt())
-                        .build());
+        List<CompletableFuture<SnippetResponse>> futures = snippetIds.stream()
+                .map(snippetId -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        List<SnippetChunk> chunks = chunksBySnippet.getOrDefault(snippetId, List.of());
+                        if (chunks.isEmpty()) {
+                            return null;
+                        }
+                        
+                        // Use streaming search - searches during reassembly
+                        boolean matches = processingService.searchSnippetStreaming(
+                            chunks.stream()
+                                .map(SnippetChunk::getContent)
+                                .collect(Collectors.toList()),
+                            chunks.get(0).getIsCompressed(),
+                            query
+                        );
+                        
+                        if (!matches) {
+                            return null; // No match, skip full reassembly
+                        }
+                        
+                        // Match found - fully reassemble for response
+                        String content = processingService.processSnippetForRetrieval(
+                            chunks.stream()
+                                .map(SnippetChunk::getContent)
+                                .collect(Collectors.toList()),
+                            chunks.get(0).getIsCompressed()
+                        );
+                        
+                        Snippet snippet = snippetMap.get(snippetId);
+                        return SnippetResponse.builder()
+                                .id(snippet.getId())
+                                .content(content)
+                                .sourceUrl(snippet.getSourceUrl())
+                                .createdAt(snippet.getCreatedAt())
+                                .updatedAt(snippet.getUpdatedAt())
+                                .build();
+                    } catch (Exception e) {
+                        log.error("Error processing snippet {} for search: {}", snippetId, e.getMessage(), e);
+                        return null;
+                    }
+                }))
+                .collect(Collectors.toList());
+        
+        // Collect results
+        for (CompletableFuture<SnippetResponse> future : futures) {
+            try {
+                SnippetResponse response = future.join();
+                if (response != null) {
+                    results.add(response);
+                }
+            } catch (Exception e) {
+                log.error("Error joining search future: {}", e.getMessage(), e);
             }
         }
+        
+        log.info("Search completed: {} matches found from {} snippets searched", 
+            results.size(), snippetIds.size());
         
         return results;
     }
@@ -346,6 +388,40 @@ public class SnippetService {
         log.info("Deleted snippet {} for user {}", snippetId, userId);
     }
 
+    /**
+     * Update snippet access (move to top of queue)
+     * Called when user accesses a snippet (copies it)
+     * 
+     * @param snippetId Snippet ID
+     */
+    public void updateSnippetAccess(Long snippetId) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        
+        // Step 1: Verify snippet exists and belongs to user
+        Snippet snippet = snippetRepository.findByIdAndUserId(snippetId, userId)
+                .orElseThrow(() -> new RuntimeException("Snippet not found: " + snippetId));
+        
+        if (snippet.getIsDeleted()) {
+            throw new RuntimeException("Snippet has been deleted");
+        }
+        
+        // Step 2: Move to front of Redis queue
+        redisQueueService.moveToFront(userId, snippetId);
+        
+        log.debug("Updated access for snippet {} for user {}", snippetId, userId);
+    }
+
+    /**
+     * Validate snippet count limit per user
+     * Throws exception if user has reached maximum allowed snippets
+     */
+    private void validateSnippetLimit(Long userId) {
+        long currentCount = snippetRepository.countByUserIdAndIsDeletedFalse(userId);
+        if (currentCount >= maxSnippetsPerUser) {
+            throw new SnippetLimitExceededException((int) currentCount, maxSnippetsPerUser);
+        }
+    }
+    
     /**
      * Validate word limit
      * Optimized for responsiveness - uses fast estimation for large files
@@ -404,6 +480,54 @@ public class SnippetService {
                 String.format("Word limit exceeded: %d words (max: %d)", 
                     wordCount, maxWordsPerSnippet));
         }
+    }
+    
+    /**
+     * Check if content is duplicate (only checks non-deleted snippets)
+     * Compares content of recent snippets to avoid duplicates
+     * 
+     * @param userId User ID
+     * @param content Content to check
+     * @return true if duplicate exists, false otherwise
+     */
+    private boolean isDuplicateContent(Long userId, String content) {
+        // Get recent non-deleted snippets (last 50)
+        List<Snippet> recentSnippets = snippetRepository.findTop50ByUserIdAndIsDeletedFalseOrderByCreatedAtDesc(userId);
+        
+        if (recentSnippets.isEmpty()) {
+            return false;
+        }
+        
+        // Check each snippet's content
+        for (Snippet snippet : recentSnippets) {
+            try {
+                // Get chunks for this snippet
+                List<SnippetChunk> chunks = chunkRepository.findBySnippetIdOrderByChunkIndexAsc(snippet.getId());
+                
+                if (chunks.isEmpty()) {
+                    // Snippet still processing, skip
+                    continue;
+                }
+                
+                // Extract and process content
+                List<byte[]> chunkContents = chunks.stream()
+                        .map(SnippetChunk::getContent)
+                        .collect(Collectors.toList());
+                
+                boolean isCompressed = chunks.get(0).getIsCompressed();
+                String snippetContent = processingService.processSnippetForRetrieval(chunkContents, isCompressed);
+                
+                if (snippetContent != null && snippetContent.equals(content)) {
+                    log.debug("Duplicate content found in snippet {}", snippet.getId());
+                    return true;
+                }
+            } catch (Exception e) {
+                // If we can't retrieve content (e.g., still processing), skip it
+                log.debug("Could not retrieve content for snippet {}: {}", snippet.getId(), e.getMessage());
+            }
+        }
+        
+        return false;
     }
 
 }
